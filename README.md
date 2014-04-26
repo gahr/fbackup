@@ -21,7 +21,7 @@ Directories are searched recursively. Example:
         /path/to/directory/to/exclude
     }
 
-The software depends on <a href="http://fossil-scm.org/">fossil</a>, and <a href="http://core.tcl.tk/tcllib/">tcllib</a>. Files are hard-linked from their location on disk into the temporary checkout using cpio.
+The software is written in <a href="http://tcl.tk">Tcl</a> and depends on <a href="http://fossil-scm.org/">fossil</a>, and <a href="http://core.tcl.tk/tcllib/">tcllib</a>. Files are hard-linked from their location on disk into the temporary checkout using cpio.
 
 Usage:
 
