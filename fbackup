@@ -1,0 +1,225 @@
+#!/usr/bin/env tclsh
+#
+# Copyright (C) 2014 Pietro Cerutti <gahr@gahr.ch>
+# 
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted provided that the following conditions
+# are met:
+#
+# 1. Redistributions of source code must retain the above copyright
+#    notice, this list of conditions and the following disclaimer.
+#
+# 2. Redistributions in binary form must reproduce the above copyright
+#    notice, this list of conditions and the following disclaimer in the
+#    documentation and/or other materials provided with the distribution.
+# 
+# THIS SOFTWARE IS PROVIDED BY AUTHOR AND CONTRIBUTORS ``AS IS'' AND
+# ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+# ARE DISCLAIMED.  IN NO EVENT SHALL AUTHOR OR CONTRIBUTORS BE LIABLE
+# FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+# DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+# OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+# HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+# LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+# OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+# SUCH DAMAGE.
+#
+# Perform incremental backups using a fossil repository as a storage. Each
+# backup ends up in a new commit where files are added / removed / modified
+# according to their staus with respect to the previous commit.
+#
+# Files to include / exclude from the backup are specified in a configuration
+# file (see -conf option below), which consists of one "include" and one
+# "exclude" section, in which files or directories to include / exclude from
+# the backup are listed, separated by whitespace (\n, \t, space, ...).
+# Directories are searched recursively. Example:
+#
+#     include {
+#       /path/to/file/to/include
+#       /path/to/directory/to/include
+#       /another/1 another/2 another/3
+#     }
+#
+#     exclude {
+#       /path/to/file/to/exclude
+#       /path/to/directory/to/exclude
+#     }
+#
+# The software is written in Tcl [1] and depends on fossil [2], and 
+# tcllib [3].  Files are hard-linked from their location on disk into
+# the temporary checkout using cpio.
+#
+# [1] http://tcl.tk
+# [2] http://fossil-scm.org/
+# [3] http://core.tcl.tk/tcllib/
+#
+# Usage:
+#
+# fbackup : ./fbackup.tcl [options]
+# options:
+#  -conf   value    Path to the backup list file      <./fbackup.list>
+#  -cpio   value    Path to the "cpio" executable     </usr/bin/cpio>
+#  -fossil value    Path to the "fossil" executable   </usr/local/bin/fossil>
+#  -name   value    Name of the backup project        <Backup>
+#  -repo   value    Path to the repository file       <./fbackup.fossil>
+#  --               Forcibly stop option processing
+#  -help            Print this message
+#  -?               Print this message
+
+package require cmdline
+package require fileutil::traverse
+package require struct::set
+
+set conf(now)           [clock format [clock seconds] -format %Y-%m-%d]
+set conf(cwd)           [file normalize [file dirname [info script]]]
+set conf(checkout)      [file join $conf(cwd) backup-$conf(now)]
+set conf(to-include)    [list]
+set conf(to-exclude)    [list]
+set conf(to-backup)     [list]
+
+proc isReadable {absPath} {
+    return [file readable $absPath]
+}
+
+proc findFiles {path} {
+    set allFiles [list]
+    set absPath [file normalize $path]
+
+    if {![isReadable $absPath]} {
+        return {}
+    }
+
+    switch [file type $absPath] {
+        "file" -
+        "link" {
+            lappend allFiles $absPath
+        }
+        "directory" {
+            fileutil::traverse t $absPath -prefilter isReadable -filter isReadable
+            t foreach f {
+                if {![file isfile $f]} {
+                    continue
+                }
+                lappend allFiles $f
+            }
+            rename t {}
+        }
+    }
+
+    return $allFiles
+}
+
+proc include {files} {
+    foreach f $files {
+        set ::conf(to-include) [concat $::conf(to-include) [findFiles $f]]
+    }
+}
+
+proc exclude {files} {
+    foreach f $files {
+        set ::conf(to-exclude) [concat $::conf(to-exclude) [findFiles $f]]
+    }
+}
+
+proc parseOptions {} {
+    set options {
+        {conf.arg   "./fbackup.list"        "Path to the backup list file"}
+        {cpio.arg   "/usr/bin/cpio"         "Path to the \"cpio\" executable"}
+        {fossil.arg "/usr/local/bin/fossil" "Path to the \"fossil\" executable"}
+        {name.arg   "Backup"                "Name of the backup project"}
+        {repo.arg   "./fbackup.fossil"      "Path to the repository file"}
+    }
+    set usage ": $::argv0 \[options]\noptions:"
+    array set params [::cmdline::getoptions ::argv $options $usage]
+
+    set ::conf(files) [file normalize $params(conf)]
+    set ::conf(cpio) [file normalize $params(cpio)]
+    set ::conf(fossil) [file normalize $params(fossil)]
+    set ::conf(name) $params(name)
+    set ::conf(repo) [file normalize $params(repo)]
+}
+
+proc dumpConfig {} {
+    parray ::conf
+}
+
+proc checkRepo {} {
+    if {[isReadable $::conf(repo)]} {
+        return
+    }
+
+    # create the repo and set the project name
+    exec $::conf(fossil) init $::conf(repo)
+    set fd [open "|$::conf(fossil) sqlite3 -R $::conf(repo)" r+]
+    puts $fd "insert into config values ('project-name', '$::conf(name)', current_timestamp);"
+    if {[catch {close $fd} err]} {
+        error "fossil error: $err"
+    }
+}
+
+proc parseConfig {} {
+    if {[catch {set fd [open $::conf(files) r]} err]} {
+        puts "Cannot open files list: $err"
+        exit 1
+    }
+    set script [read $fd]
+    close $fd
+    set slave [interp create -safe]
+    interp alias $slave include {} include
+    interp alias $slave exclude {} exclude
+    $slave eval $script
+    interp delete $slave
+}
+
+proc buildBackupList {} {
+    set :::conf(to-backup) [lsort [::struct::set difference $::conf(to-include) $::conf(to-exclude)]]
+}
+
+proc openRepository {} {
+    file mkdir $::conf(checkout)
+    cd $::conf(checkout)
+    exec $::conf(fossil) open $::conf(repo)
+}
+
+proc copyFilesIntoRepository {} {
+    set cpio [open "|$::conf(cpio) --unconditional -p -L --link -m --make-directories ." r+]
+    foreach f $::conf(to-backup) {
+        puts $cpio $f
+    }
+    if {[catch {close $cpio} err]} {
+        if {![regexp {^[0-9]+ blocks$} $err]} {
+            error "cpio error: $err"
+        }
+    }
+}
+
+proc commitChanges {} {
+    exec $::conf(fossil) addremove --dotfiles --ignore .fslckout
+    exec $::conf(fossil) commit --allow-empty --no-warnings -m "Backup $::conf(now)" --tag $::conf(now)
+}
+
+proc cleanup {} {
+    exec $::conf(fossil) close
+    cd $::conf(cwd)
+    file delete -force $::conf(checkout)
+}
+
+proc printStats {} {
+    puts [exec $::conf(fossil) timeline -v -n 1 now -R $::conf(repo)]
+}
+
+if {$::argv0 eq [info script]} {
+    if {[catch {parseOptions} err]} {
+        puts $err
+        exit 1
+    }
+    checkRepo
+    parseConfig
+    buildBackupList
+    openRepository
+    copyFilesIntoRepository
+    commitChanges
+    cleanup
+    printStats
+}
