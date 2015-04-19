@@ -167,7 +167,6 @@ proc parseOptions {} {
     set ::conf(fossil) [file normalize $params(fossil)]
     set ::conf(name)   $params(name)
     set ::conf(repo)   [file normalize $params(repo)]
-    set ::conf(debug)  $params(debug)
 }
 
 proc dumpConfig {} {
