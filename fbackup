@@ -1,6 +1,6 @@
 #!/usr/bin/env tclsh
 #
-# Copyright (C) 2014-2015 Pietro Cerutti <gahr@gahr.ch>
+# Copyright (C) 2014-2016 Pietro Cerutti <gahr@gahr.ch>
 # 
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions
@@ -210,6 +210,18 @@ proc openRepository {} {
     exec $::conf(fossil) open $::conf(repo)
 }
 
+proc deleteFilesFromRepository {} {
+    set files [exec $::conf(fossil) ls]
+    set dirs [list]
+    foreach f $files {
+        lappend dirs [file dirname $f]
+        file delete -force $f
+    }
+    foreach d $dirs {
+        catch {file delete $d}
+    }
+}
+
 proc copyFilesIntoRepository {} {
     set cpio [open "|$::conf(cpio) --unconditional -p -L --link -m --make-directories ." r+]
     foreach f $::conf(to-backup) {
@@ -264,6 +276,7 @@ if {$::argv0 eq [info script]} {
     parseConfig
     buildBackupList
     openRepository
+    deleteFilesFromRepository
     copyFilesIntoRepository
     commitChanges
     cleanup
