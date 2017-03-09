@@ -177,6 +177,11 @@ proc dumpConfig {} {
     parray ::conf
 }
 
+proc getFossilVersion {} {
+    regexp {This is fossil version ([0-9]+)} \
+        [exec $::conf(fossil) version] _ ::conf(version)
+}
+
 proc checkRepo {} {
     if {[exists $::conf(repo)]} {
         if {![isReadable $::conf(repo)] || ![isWritable $::conf(repo)]} {
@@ -252,7 +257,12 @@ proc commitChanges {} {
     }
 
     try {
-        exec $::conf(fossil) commit --sha1sum --allow-empty --no-warnings -m "Backup $::conf(now)" --tag $::conf(now)
+        if {$::conf(version) == 1} {
+            set hash --sha1sum
+        } else {
+            set hash --hash
+        }
+        exec $::conf(fossil) commit $hash --allow-empty --no-warnings -m "Backup $::conf(now)" --tag $::conf(now)
     } on error msg {
         cleanup
         error $msg
@@ -277,6 +287,7 @@ if {$::argv0 eq [info script]} {
         exit 1
     }
     checkRepo
+    getFossilVersion
     parseConfig
     buildBackupList
     openRepository
