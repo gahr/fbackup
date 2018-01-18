@@ -1,6 +1,6 @@
 #!/usr/bin/env tclsh
 #
-# Copyright (C) 2014-2017 Pietro Cerutti <gahr@gahr.ch>
+# Copyright (C) 2014-2018 Pietro Cerutti <gahr@gahr.ch>
 # 
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions
@@ -78,6 +78,7 @@ package require cmdline
 package require fileutil::traverse
 package require struct::set
 
+set conf(i-am-root)     [expr {$tcl_platform(user) eq {root}}]
 set conf(now)           [clock format [clock seconds] -format %Y-%m-%d]
 set conf(cwd)           [file normalize [file dirname [info script]]]
 set conf(checkout)      [file join $conf(cwd) backup-$conf(now)]
@@ -91,7 +92,7 @@ proc exists {absPath} {
 }
 
 proc isReadable {absPath} {
-    return [file readable $absPath]
+    return [expr {$::conf(i-am-root) || [file readable $absPath]}]
 }
 
 proc isDirectoryAndReadable {absPath} {
@@ -262,7 +263,7 @@ proc commitChanges {} {
         } else {
             set hash --hash
         }
-        exec $::conf(fossil) commit $hash --allow-empty --no-warnings -m "Backup $::conf(now)" --tag $::conf(now)
+        exec $::conf(fossil) commit $hash --user $::tcl_platform(user) --allow-empty --no-warnings -m "Backup $::conf(now)" --tag $::conf(now)
     } on error msg {
         cleanup
         error $msg
@@ -270,10 +271,12 @@ proc commitChanges {} {
 }
 
 proc cleanup {} {
-    catch {
-        exec $::conf(fossil) close
+    try {
+        exec $::conf(fossil) close --force
         cd $::conf(cwd)
         file delete -force $::conf(checkout)
+    } on error msg {
+        error $msg
     }
 }
 
